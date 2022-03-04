@@ -79,23 +79,42 @@ class ImageOutputChunk(OutputChunk):
         self.img_checksum = img_checksum
         self.img_width, self.img_height = img_shape
 
-    def _get_char_pixelsize(self) -> Tuple[int, int]:
-        import termios
-        import fcntl
-        import struct
+    def _get_char_pixelsize(self, options, nvim) -> Tuple[int, int]:
+        if options.image_provider == "ueberzug":
+            import termios
+            import fcntl
+            import struct
 
-        pty = get_pty()
-        with open(pty) as fd_pty:
-            farg = struct.pack("HHHH", 0, 0, 0, 0)
-            fretint = fcntl.ioctl(fd_pty, termios.TIOCGWINSZ, farg)
-            rows, cols, xpixels, ypixels = struct.unpack("HHHH", fretint)
+            pty = get_pty()
+            with open(pty) as fd_pty:
+                farg = struct.pack("HHHH", 0, 0, 0, 0)
+                fretint = fcntl.ioctl(fd_pty, termios.TIOCGWINSZ, farg)
+                rows, cols, xpixels, ypixels = struct.unpack("HHHH", fretint)
 
-            return max(1, xpixels//cols), max(1, ypixels//rows)
+                return max(1, xpixels//cols), max(1, ypixels//rows)
 
-    def place(self, _: MagmaOptions, lineno: int, shape: Tuple[int, int, int, int], canvas: Canvas) -> str:
+        rows, cols, xpixels, ypixels = nvim.exec_lua("""
+        local Job = require("plenary.job")
+        cols = vim.api.nvim_get_option('columns')
+        rows = vim.api.nvim_get_option('lines')
+        data = Job:new({
+            command = 'kitty',
+            args = {'+kitten', 'icat', '--print-window-size'},
+            enable_recording = true,
+        }):sync()
+        data = {data[1]:match("(.+)x(.+)")}
+        xpixels = tonumber(data[1])
+        ypixels = tonumber(data[2])
+        return {rows, cols, xpixels, ypixels}
+        """)
+
+        return max(1, xpixels//cols), max(1, ypixels//rows)
+
+
+    def place(self, options: MagmaOptions, lineno: int, shape: Tuple[int, int, int, int], canvas: Canvas) -> str:
         x, y, w, h = shape
 
-        xpixels, ypixels = self._get_char_pixelsize()
+        xpixels, ypixels = self._get_char_pixelsize(options, canvas.nvim)
 
         max_nlines = max(0, (h-y)-lineno - 1)
         if ((self.img_width/xpixels)/(self.img_height/ypixels))*max_nlines <= w:
@@ -144,7 +163,7 @@ def to_outputchunk(alloc_file, data: dict, metadata: dict) -> OutputChunk:
     def _to_image_chunk(path: str) -> OutputChunk:
         import hashlib
         from PIL import Image
-        import ueberzug as _
+        # import ueberzug as _
 
         pil_image = Image.open(path)
         return ImageOutputChunk(
